@@ -1,6 +1,7 @@
 package landlock
 
 import (
+	"fmt"
 	"testing"
 
 	ll "github.com/landlock-lsm/go-landlock/landlock/syscall"
@@ -13,27 +14,27 @@ func TestConfigString(t *testing.T) {
 	}{
 		{
 			cfg:  Config{handledAccessFS: 0, handledAccessNet: 0},
-			want: "{Landlock V0; FS: ∅; Net: ∅}",
+			want: "{Landlock V0; FS: ∅; Net: ∅; Scoped: ∅}",
 		},
 		{
 			cfg:  Config{handledAccessFS: ll.AccessFSWriteFile},
-			want: "{Landlock V1; FS: {write_file}; Net: ∅}",
+			want: "{Landlock V1; FS: {write_file}; Net: ∅; Scoped: ∅}",
 		},
 		{
 			cfg:  Config{handledAccessNet: ll.AccessNetBindTCP},
-			want: "{Landlock V4; FS: ∅; Net: {bind_tcp}}",
+			want: "{Landlock V4; FS: ∅; Net: {bind_tcp}; Scoped: ∅}",
 		},
 		{
 			cfg:  V1,
-			want: "{Landlock V1; FS: all; Net: ∅}",
+			want: "{Landlock V1; FS: all; Net: ∅; Scoped: ∅}",
 		},
 		{
 			cfg:  V1.BestEffort(),
-			want: "{Landlock V1; FS: all; Net: ∅ (best effort)}",
+			want: "{Landlock V1; FS: all; Net: ∅; Scoped: ∅ (best effort)}",
 		},
 		{
 			cfg:  Config{handledAccessFS: 1 << 63},
-			want: "{Landlock V???; FS: {1<<63}; Net: ∅}",
+			want: "{Landlock V???; FS: {1<<63}; Net: ∅; Scoped: ∅}",
 		},
 	} {
 		got := tc.cfg.String()
@@ -44,17 +45,54 @@ func TestConfigString(t *testing.T) {
 }
 
 func TestNewConfig(t *testing.T) {
-	for _, a := range []AccessFSSet{
-		ll.AccessFSWriteFile, ll.AccessFSRefer,
+	for _, tt := range []struct {
+		name string
+		args []any
+		want Config
+	}{
+		{
+			name: "fs_write_file",
+			args: []any{AccessFSSet(ll.AccessFSWriteFile)},
+			want: Config{handledAccessFS: ll.AccessFSWriteFile},
+		},
+		{
+			name: "fs_refer",
+			args: []any{AccessFSSet(ll.AccessFSRefer)},
+			want: Config{handledAccessFS: ll.AccessFSRefer},
+		},
+		{
+			name: "net_bind",
+			args: []any{AccessNetSet(ll.AccessNetBindTCP)},
+			want: Config{handledAccessNet: ll.AccessNetBindTCP},
+		},
+		{
+			name: "scoped_signal",
+			args: []any{ScopedSet(ll.ScopeSignal)},
+			want: Config{scoped: ll.ScopeSignal},
+		},
+		{
+			name: "christmas_tree",
+			args: []any{
+				AccessFSSet(ll.AccessFSReadDir | ll.AccessFSReadFile),
+				AccessNetSet(ll.AccessNetBindTCP | ll.AccessNetConnectTCP),
+				ScopedSet(ll.ScopeSignal | ll.ScopeAbstractUnixSocket),
+			},
+			want: Config{
+				handledAccessFS:  ll.AccessFSReadDir | ll.AccessFSReadFile,
+				handledAccessNet: ll.AccessNetBindTCP | ll.AccessNetConnectTCP,
+				scoped:           ll.ScopeSignal | ll.ScopeAbstractUnixSocket,
+			},
+		},
 	} {
-		c, err := NewConfig(a)
-		if err != nil {
-			t.Errorf("NewConfig(): expected success, got %v", err)
-		}
-		want := a
-		if c.handledAccessFS != want {
-			t.Errorf("c.handledAccessFS = %v, want %v", c.handledAccessFS, want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := NewConfig(tt.args...)
+			if err != nil {
+				t.Errorf("NewConfig(): expected success, got %v", err)
+			}
+			if *cfg != tt.want {
+				t.Errorf("cfg = %v, want %v", cfg, tt.want)
+			}
+		})
 	}
 }
 
@@ -86,5 +124,37 @@ func TestNewConfigFailures(t *testing.T) {
 		if err == nil {
 			t.Errorf("NewConfig(%v) success, expected error", args)
 		}
+	}
+}
+
+func TestCompatibleWithABI(t *testing.T) {
+	for i, abi := range abiInfos {
+		cfg := abi.asConfig()
+		t.Run(fmt.Sprintf("V%v", i), func(t *testing.T) {
+			for j := 0; j < i; j++ {
+				if cfg.compatibleWithABI(abiInfos[j]) {
+					t.Errorf("cfg.compatibleWithABI(abiInfos[%v]) = true, want false", j)
+				}
+			}
+			for j := i; j < len(abiInfos); j++ {
+				if !cfg.compatibleWithABI(abiInfos[j]) {
+					t.Errorf("cfg.compatibleWithABI(abiInfos[%v]) = false, want true", j)
+				}
+			}
+		})
+	}
+}
+
+func TestRestrictTo(t *testing.T) {
+	for i, abi := range abiInfos {
+		cfg := abi.asConfig()
+		t.Run(fmt.Sprintf("V%v", i), func(t *testing.T) {
+			for j := 0; j < len(abiInfos); j++ {
+				compatCfg := cfg.restrictTo(abiInfos[j])
+				if !compatCfg.compatibleWithABI(abiInfos[j]) {
+					t.Errorf("compatCfg.compatibleWithABI(abiInfos[%v]) = false, want true", j)
+				}
+			}
+		})
 	}
 }
