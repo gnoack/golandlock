@@ -13,16 +13,12 @@ import (
 	ll "github.com/landlock-lsm/go-landlock/landlock/syscall"
 )
 
-// isRunningInSubprocess indicates whether we are currently running in a subprocess context.
-var isRunningInSubprocess = false
-
 // RunInSubprocess runs the given test function in a subprocess
 // and forwards its output.
 func RunInSubprocess(t *testing.T, f func()) {
 	t.Helper()
 
-	if os.Getenv("IS_SUBPROCESS") != "" {
-		isRunningInSubprocess = true
+	if IsRunningInSubprocess() {
 		f()
 		return
 	}
@@ -67,7 +63,7 @@ func RunInSubprocess(t *testing.T, f func()) {
 func TempDir(t testing.TB) string {
 	t.Helper()
 
-	if isRunningInSubprocess {
+	if IsRunningInSubprocess() {
 		dir, err := os.MkdirTemp("", "LandlockTestTempDir")
 		if err != nil {
 			t.Fatalf("os.MkdirTemp: %v", err)
@@ -84,4 +80,8 @@ func RequireABI(t testing.TB, want int) {
 	if v, err := ll.LandlockGetABIVersion(); err != nil || v < want {
 		t.Skipf("Requires Landlock >= V%v, got V%v (err=%v)", want, v, err)
 	}
+}
+
+func IsRunningInSubprocess() bool {
+	return os.Getenv("IS_SUBPROCESS") != ""
 }

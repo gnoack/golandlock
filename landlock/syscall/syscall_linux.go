@@ -13,7 +13,7 @@ import (
 // LandlockCreateRuleset creates a ruleset file descriptor with the
 // given attributes.
 func LandlockCreateRuleset(attr *RulesetAttr, flags int) (fd int, err error) {
-	r0, _, e1 := syscall.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(attr)), uintptr(rulesetAttrSize), uintptr(flags))
+	r0, _, e1 := syscall.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, uintptr(unsafe.Pointer(attr)), unsafe.Sizeof(*attr), uintptr(flags))
 	fd = int(r0)
 	if e1 != 0 {
 		err = syscall.Errno(e1)
