@@ -1,0 +1,68 @@
+name: 'Kernel Integration Tests'
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ '**' ]
+
+jobs:
+  build-initramfs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: set up Go
+        uses: actions/setup-go@v3
+        with:
+          go-version: 1.18
+
+      - name: checkout
+        uses: actions/checkout@v3
+
+      - name: build initramfs
+        run: |
+          go install github.com/florianl/bluebox@latest
+
+      - name: build tests
+        run: |
+          go test -ldflags='-extldflags=-static' -trimpath -tags 'osusergo netgo static_build linux' -c -o go-landlock-tests ./landlock
+
+      - name: build initramfs
+        run: |
+          bluebox -e go-landlock-tests:-test.v -o initramfs.cpio
+
+      - name: upload initramfs for tests
+        # Upload the generated initramfs.cpio and make it available for the parallel per-kernel tests.
+        uses: actions/upload-artifact@v3
+        with:
+          name: initramfs
+          path: |
+            initramfs.cpio
+
+  per-kernel-tests:
+    needs: build-initramfs
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        kernel-version: ["5.12.0-plus", "5.15", "5.19-rc4"]
+    steps:
+      - name: install qemu && curl
+        # Make sure required software packages are available.
+        run: |
+          sudo apt --yes update
+          sudo apt --yes install qemu-system-x86 curl
+
+      - name: get initramfs
+        # Fetch the initramfs.cpio that was created in the previous step.
+        uses: actions/download-artifact@v3
+        with:
+          name: initramfs
+
+      - name: get kernel
+        # Fetch the public kernel image that will be used in this test run.
+        run: |
+          curl -s -L -o bzImage.${{ matrix.kernel-version }} --fail https://github.com/gnoack/linux-kernel-images/blob/main/bzImage.${{ matrix.kernel-version }}?raw=true
+
+      - name: run tests on kernel
+        # Run the tests.
+        run: |
+          qemu-system-x86_64  -nographic -append "console=ttyS0 lsm=landlock" -m 2G -kernel bzImage.${{ matrix.kernel-version }} -initrd initramfs.cpio
